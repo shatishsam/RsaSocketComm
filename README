@@ -1,0 +1,26 @@
+Client and Server based socket communicaion with RSA encryption
+
+Instructions to build in linux
+1.) install openssl:
+sudo apt update
+sudo apt install libssl-dev
+
+2.) Build server seperately
+g++ -o server server.cpp rsa_utils.cpp -lssl -lcrypto -w
+
+3.) Build client seperately
+g++ -o client client.cpp rsa_utils.cpp -lssl -lcrypto -w
+
+Algorith for server:
+1.) Bind server and listen for clients
+2.) When client is connected send public key and accept clients public key
+3.) start receive and send threads to send and receive messages parallely
+4.) encrypt message with clients public key before sending
+5.) decrypt message with servers private key when receiving messages
+
+Algorith for client:
+1.) Connect to server with given ipaddress
+2.) When server is connected accept server public key and send public key. 
+3.) start receive and send threads to send and receive messages parallely
+4.) encrypt message with servers public key before sending
+5.) decrypt message with clients private key when receiving messages
