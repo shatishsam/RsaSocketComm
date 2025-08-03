@@ -13,31 +13,31 @@ RSA* client_private_key = nullptr;
 RSA* client_public_key = nullptr;
 RSA* server_public_key = nullptr;
 
-void receive_messages(int client_fd) 
+void receive_messages(int server_fd) 
 {
     char buffer[BUFFER_SIZE];
     
     while (true)
     {
         memset(buffer, 0, sizeof(buffer));
-        int read_val = read(client_fd, buffer, BUFFER_SIZE);
+        int read_val = read(server_fd, buffer, BUFFER_SIZE);
         if (read_val <= 0)
         {
             std::cerr << "Server disconnected or error reading!" << std::endl;
             break;
         }
 
-        // Decrypt the response from the server
+        // Decrypt the response from the server using private key
         unsigned char decrypted[BUFFER_SIZE];
-        int decrypted_length = rsa_decrypt((unsigned char*)buffer, read_val, decrypted, client_private_key);
+        int decrypted_length = rsa_private_decrypt((unsigned char*)buffer, read_val, decrypted, client_private_key);
         decrypted[decrypted_length] = '\0';
         std::cout << "Decrypted message from server: " << decrypted << std::endl;
     }
 
-    close(client_fd);
+    close(server_fd);
 }
 
-void send_messages(int client_fd) 
+void send_messages(int server_fd) 
 {
     while (true) 
     {
@@ -45,16 +45,17 @@ void send_messages(int client_fd)
         std::cout << "Enter message to send (or type 'exit' to quit): ";
         std::cin.getline(message, BUFFER_SIZE);
 
-        if (strcmp(message, "exit") == 0) {
+        if (strcmp(message, "exit") == 0) 
+        {
             break;
         }
 
         // Encrypt message with server's public key
         unsigned char encrypted[BUFFER_SIZE];
-        int encrypted_length = rsa_encrypt(message, encrypted, server_public_key);
+        int encrypted_length = rsa_public_encrypt(message, encrypted, server_public_key);
 
         // Send encrypted message to server
-        int send_val = send(client_fd, encrypted, encrypted_length, 0);
+        int send_val = send(server_fd, encrypted, encrypted_length, 0);
         if (send_val <= 0)
         {
             std::cerr << "client disconnected or error reading!" << std::endl;
@@ -63,15 +64,15 @@ void send_messages(int client_fd)
         std::cout << "Encrypted message sent to server." << std::endl;
     }
 
-    close(client_fd);
+    close(server_fd);
 }
 
-int receiveAndProcessServerPublicKey(int client_fd)
+int receiveAndProcessServerPublicKey(int server_fd)
 {
     // Receive the server's public key
     char buffer[BUFFER_SIZE];
     memset(buffer, 0, sizeof(buffer));
-    int received_length = read(client_fd, buffer, BUFFER_SIZE);
+    int received_length = read(server_fd, buffer, BUFFER_SIZE);
     if (received_length <= 0) 
     {
         std::cerr << "Failed to receive the server's public key!" << std::endl;
@@ -96,15 +97,37 @@ int receiveAndProcessServerPublicKey(int client_fd)
     return 0;
 }
 
-int sendPublicKeyToServer(int client_fd)
+int sendPublicKeyToServer(int server_fd)
 {
     // Send the client's public key to the server
     std::string client_public_key_pem = rsa_public_key_to_pem(client_public_key);
-    int send_val =  send(client_fd, client_public_key_pem.c_str(), client_public_key_pem.length(), 0);
+    int send_val =  send(server_fd, client_public_key_pem.c_str(), client_public_key_pem.length(), 0);
     if(send_val < 0){
         std::cerr << "error with sending public key to server" << std::endl;
     }
     return send_val;
+}
+
+int performDigitalSignalValidation(int server_fd)
+{
+    std::string expectedHashValue = sha256(VALIDATION_TEXT);
+    char buffer[BUFFER_SIZE];
+    memset(buffer, 0, sizeof(buffer));
+    int received_length = read(server_fd, buffer, BUFFER_SIZE);
+    if (received_length <= 0) 
+    {
+        std::cerr << "Failed to receive the servers's hash value!" << std::endl;
+        return received_length;
+    }
+    std::cout<<"received bytes form server for hash is: "<<received_length<<std::endl;
+
+    //Decrypt message from client using private key
+    unsigned char decrypted[BUFFER_SIZE];
+    int decrypted_length = rsa_public_decrypt((unsigned char*)buffer, received_length, decrypted, server_public_key);
+    decrypted[decrypted_length] = '\0';
+    std::cout << "Received hash value from server is: " << decrypted << std::endl;
+
+    return strcmp(expectedHashValue.c_str(), reinterpret_cast<const char*>(decrypted)) == 0;
 }
 
 int main()
@@ -113,8 +136,8 @@ int main()
     generate_rsa_key_pair(&client_public_key, &client_private_key);
 
     // Create socket
-    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_fd == -1) {
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
         std::cerr << "Socket creation failed!" << std::endl;
         return -1;
     }
@@ -131,37 +154,44 @@ int main()
     }
 
     // Connect to the server
-    if (connect(client_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0)
+    if (connect(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0)
     {
         std::cerr << "Connection failed!" << std::endl;
         return -1;
     }
 
     //receive server public key
-    if(receiveAndProcessServerPublicKey(client_fd) < 0)
+    if(receiveAndProcessServerPublicKey(server_fd) < 0)
     {
-        close(client_fd);
+        close(server_fd);
         return -1;
     }
 
     //share client public key
-    if(sendPublicKeyToServer(client_fd) < 0)
+    if(sendPublicKeyToServer(server_fd) < 0)
     {
-        close(client_fd);
+        close(server_fd);
         return -1;
     }
     std::cout << "Key Exchange Success!" << std::endl;
 
+    //perform digital signature validation
+    if(performDigitalSignalValidation(server_fd)) {
+        std::cout<<"digital signature of server validated success hash matches"<<std::endl;
+    } else { 
+        std::cout<<"digital signature validation falied"<<std::endl;
+    }
+
     // Start receiving and sending in separate threads
-    std::thread receive_thread(receive_messages, client_fd);
-    std::thread send_thread(send_messages, client_fd);
+    std::thread receive_thread(receive_messages, server_fd);
+    std::thread send_thread(send_messages, server_fd);
 
     // Wait for both threads to finish
     receive_thread.join();
     send_thread.join();
 
     // Close the socket
-    close(client_fd);
+    close(server_fd);
 
     return 0;
 }

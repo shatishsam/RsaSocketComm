@@ -11,15 +11,24 @@
 void generate_rsa_key_pair(RSA** public_key, RSA** private_key);
 
 // Function to encrypt a message using a public key
-int rsa_encrypt(const char* message, unsigned char* encrypted, RSA* public_key);
+int rsa_public_encrypt(const char* message, unsigned char* encrypted, RSA* public_key);
+
+// Function to encrypt a message using a private key
+int rsa_private_encrypt(const char* message, unsigned char* encrypted, RSA* private_key);
 
 // Function to decrypt a message using a private key
-int rsa_decrypt(const unsigned char* encrypted, int encrypted_length, unsigned char* decrypted, RSA* private_key);
+int rsa_private_decrypt(const unsigned char* encrypted, int encrypted_length, unsigned char* decrypted, RSA* private_key);
+
+// Function to decrypt a message using a public key
+int rsa_public_decrypt(const unsigned char* encrypted, int encrypted_length, unsigned char* decrypted, RSA* public_key);
 
 // Function to convert an RSA public key to PEM format string
 std::string rsa_public_key_to_pem(RSA* public_key);
 
 // Function to convert an RSA private key to PEM format string
 std::string rsa_private_key_to_pem(RSA* private_key);
+
+// Function to get sha256 hash of given string
+std::string sha256(const std::string& data);
 
 #endif // RSA_UTILS_H

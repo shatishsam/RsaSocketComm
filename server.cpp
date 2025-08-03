@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <thread>
-#include <atomic>
 
 #include "constants.h"
 #include "rsa_utils.h"
@@ -14,7 +13,6 @@ RSA* server_private_key = nullptr;
 RSA* server_public_key = nullptr;
 RSA* client_public_key = nullptr;
 
-// Function to handle receiving messages from the server
 void receive_messages(int client_fd)
 {
     char buffer[BUFFER_SIZE];
@@ -31,7 +29,7 @@ void receive_messages(int client_fd)
 
         // Decrypt message from client using private key
         unsigned char decrypted[BUFFER_SIZE];
-        int decrypted_length = rsa_decrypt((unsigned char*)buffer, read_val, decrypted, server_private_key);
+        int decrypted_length = rsa_private_decrypt((unsigned char*)buffer, read_val, decrypted, server_private_key);
         decrypted[decrypted_length] = '\0';
         std::cout << "Decrypted message from client: " << decrypted << std::endl;
     }
@@ -47,13 +45,14 @@ void send_messages(int client_fd)
         std::cout << "Enter message to send (or type 'exit' to quit): ";
         std::cin.getline(message, BUFFER_SIZE);
 
-        if (strcmp(message, "exit") == 0) {
+        if (strcmp(message, "exit") == 0) 
+        {
             break;
         }
 
-        // Encrypt response message using the client's public key
+        // Encrypt response message with client's public key
         unsigned char encrypted[BUFFER_SIZE];
-        int encrypted_length = rsa_encrypt(message, encrypted, client_public_key);
+        int encrypted_length = rsa_public_encrypt(message, encrypted, client_public_key);
 
         // Send the encrypted message to the client
         int send_val = send(client_fd, encrypted, encrypted_length, 0);
@@ -108,10 +107,26 @@ int sendPublicKeyToClient(int client_fd)
     return send_val;
 }
 
+int performDigitalSignalValidation(int client_fd)
+{
+    std::string hashValue = sha256(VALIDATION_TEXT);
+    
+    // Encrypt response message with servers private key to ensure identity
+    unsigned char encrypted[BUFFER_SIZE];
+    int encrypted_length = rsa_private_encrypt(hashValue.c_str(), encrypted, server_private_key);
+
+    int send_val =  send(client_fd, encrypted, encrypted_length, 0);
+    if(send_val < 0)
+    {
+        std::cerr << "error with sending public key to client" << std::endl;
+    }
+    std::cout<<"sent hash "<<hashValue<<" to client bytes: "<<send_val<<std::endl;
+    return send_val;
+}
+
 // Main server function
 int main() 
 {
-
     // Generate RSA key pair for the server
     generate_rsa_key_pair(&server_public_key, &server_private_key);
 
@@ -170,6 +185,11 @@ int main()
             continue;
         }
         std::cout << "Key Exchange Success!" << std::endl;
+
+        //perform digital signature validation
+        if(performDigitalSignalValidation(new_socket) < 0){
+            std::cout<<"digital signature validation falied"<<std::endl;
+        }
 
         // Start receiving and sending in separate threads
         std::thread receive_thread(receive_messages, new_socket);
