@@ -5,13 +5,47 @@
 #include <unistd.h>
 #include <string.h>
 #include <thread>
+#include <unordered_map>
 
 #include "constants.h"
 #include "rsa_utils.h"
 
+class clientDetails
+{
+    public:
+    int client_fd;
+    RSA* client_public_key;
+
+    clientDetails()
+    {
+        client_fd = -1;
+        client_public_key = nullptr;
+    }
+};
+
 RSA* server_private_key = nullptr;
+
 RSA* server_public_key = nullptr;
-RSA* client_public_key = nullptr;
+
+std::unordered_map<int, clientDetails*> clientHashMap; //holds all the clients public key
+
+void doClientCleanUp(int client_fd)
+{
+    if(clientHashMap.find(client_fd) != clientHashMap.end())
+    {
+        //free public key
+        free(clientHashMap[client_fd]->client_public_key);
+        clientHashMap[client_fd]->client_public_key = nullptr;
+
+        //free client details
+        free(clientHashMap[client_fd]);
+        clientHashMap[client_fd] = nullptr;
+
+        //delete entry from hashmap
+        clientHashMap.erase(client_fd);
+    }
+    close(client_fd);
+}
 
 void receive_messages(int client_fd)
 {
@@ -34,7 +68,7 @@ void receive_messages(int client_fd)
         std::cout << "Decrypted message from client: " << decrypted << std::endl;
     }
 
-    close(client_fd);
+    doClientCleanUp(client_fd);
 }
 
 void send_messages(int client_fd) 
@@ -47,12 +81,17 @@ void send_messages(int client_fd)
 
         if (strcmp(message, "exit") == 0) 
         {
-            break;
+            break;  //if server gets exit what do we do?
         }
 
         // Encrypt response message with client's public key
+        if(clientHashMap.find(client_fd) == clientHashMap.end() || !clientHashMap[client_fd]->client_public_key)
+        {
+            std::cout << "Cannot send mesaage to client "<<client_fd<<" as it probably closed the connection. stopping send thread"<<std::endl;
+            break;
+        }
         unsigned char encrypted[BUFFER_SIZE];
-        int encrypted_length = rsa_public_encrypt(message, encrypted, client_public_key);
+        int encrypted_length = rsa_public_encrypt(message, encrypted, clientHashMap[client_fd]->client_public_key);
 
         // Send the encrypted message to the client
         int send_val = send(client_fd, encrypted, encrypted_length, 0);
@@ -64,12 +103,13 @@ void send_messages(int client_fd)
         std::cout << "Encrypted response sent to client." << std::endl;
     }
 
-    close(client_fd);
+    doClientCleanUp(client_fd);
 }
 
 int receiveAndProcessClientPublicKey(int client_fd)
 {
     // Receive the client's public key
+    RSA* client_public_key = nullptr;
     char buffer[BUFFER_SIZE];
     memset(buffer, 0, sizeof(buffer));
     int received_length = read(client_fd, buffer, BUFFER_SIZE);
@@ -93,6 +133,13 @@ int receiveAndProcessClientPublicKey(int client_fd)
         std::cerr << "Failed to parse the client's public key!" << std::endl;
         return -1;
     }
+
+    //add client details to the hashmap
+    clientDetails *newClient = new clientDetails();
+    newClient->client_fd = client_fd;
+    newClient->client_public_key = client_public_key;
+    clientHashMap[client_fd] = newClient;
+
     return 0;
 }
 
@@ -195,9 +242,9 @@ int main()
         std::thread receive_thread(receive_messages, new_socket);
         std::thread send_thread(send_messages, new_socket);
 
-        // Wait for both threads to finish
-        receive_thread.join();
-        send_thread.join();
+        // detach both threads so server can accept new client
+        receive_thread.detach();
+        send_thread.detach();
     }
 
     // Close the server socket
